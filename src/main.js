@@ -68,13 +68,49 @@ Spotfire.initialize(async (mod) => {
             }
         };
 		
-		
 		/**
 		 * Create data structure for bars
 		 */
 		var cataxis = await dataView.categoricalAxis("X");
 		var cataxislevels = cataxis.hierarchy.levels;
-		
+
+		let hierarchyRoot = await cataxis.hierarchy.root();
+		let levels = {};
+		hierarchyRoot.children.forEach(collectNodes);
+
+		/** @param {Spotfire.DataViewHierarchyNode} */
+		function collectNodes(node) {
+			levels[node.level] = levels[node.level] || {};
+			
+			levels[node.level][node.key] = levels[node.level][node.key] || {nodes: [], barName: node.formattedValue(), totalValue: 0};
+			// Collect all nodes with the same level and key into an array.
+			levels[node.level][node.key].nodes.push(node);
+
+			if (node.children) {
+				node.children.forEach(collectNodes);				
+			}
+		}
+
+		rows.forEach(row => {
+			let value = row.continuous("Y").value();
+			if(value < 0) {
+				throw new Error("Sankey can not display negative values.");
+			}
+
+			row.categorical("X").value().forEach((v, i) => {
+				levels[i][v.key].totalValue += value;
+			})
+		})
+
+		let uniqueValues = new Set(Object.keys(levels).map(level => 
+			Object.keys(levels[level]).reduce((p, key) => p + levels[level][key].totalValue, 0)
+		));
+
+		if(uniqueValues.size != 1) {
+			throw new Error("Count in bars does not match.")
+		}
+
+
 		var bars = new Array();
 		
 		cataxislevels.forEach(function(level, i){
@@ -114,7 +150,7 @@ Spotfire.initialize(async (mod) => {
 		 * Define constansts
 		 */
 		const barwidth = 14;
-		const bargap = (windowSize.width - barwidth * (bars.length) ) / (bars.length - 1);
+		const bargap = (windowSize.width - barwidth * (bars.length) ) / (bars.length - 1) || 0;
 
 		//TODO barsegmentgap should be look at max number of barsegments to ensure certain minimum space between segments 
 		const barsegmentgap = windowSize.height * 0.1;
@@ -174,18 +210,27 @@ Spotfire.initialize(async (mod) => {
 		/**
 		 * Render bars
 		 */
-		bars.forEach(function(bar, i){
-			
-			bar.barsegments.forEach(function(barsegment, j){
+		Object.keys(levels).forEach(function(level, i){
+			let segments = levels[level];
+			let currentY = 0;
+			Object.keys(segments).map(k => levels[level][k]).forEach(function(barsegment, j){
 								
+
+				let x = bargap * i;
+				let y = currentY;
+				let height = barsegment.totalValue * heightscale;
+				
+				
+				currentY += (height + barsegmentgap);
+				
 				/**
 				 * Render rect
 				 */
 				var rect = document.createElementNS("http://www.w3.org/2000/svg","rect");
-				rect.setAttribute("x", barsegment.x);
-				rect.setAttribute("y", barsegment.y);
+				rect.setAttribute("x", x);
+				rect.setAttribute("y", y);
 				rect.setAttribute("width", barwidth);
-				rect.setAttribute("height", barsegment.value * heightscale);
+				rect.setAttribute("height", height);
 				rect.setAttribute("style", "fill: grey;");
 				rect.setAttribute("bar", i);
 				rect.setAttribute("barsegment", j);
@@ -235,24 +280,24 @@ Spotfire.initialize(async (mod) => {
 				/**
 				 * Render label
 				 */
-				var text = document.createElementNS("http://www.w3.org/2000/svg","text");
-				if ( i == bars.length - 1 ) {
-					text.setAttribute("x", barsegment.x - barsegmentlabelgap);
-					text.setAttribute("text-anchor", "end");
-				}				
-				else {
-					text.setAttribute("x", barsegment.x + barwidth + barsegmentlabelgap);
-					text.setAttribute("text-anchor", "start");
-				}
-				if ( barsegment.y < windowSize.height - barsegmentgap ){
-					text.setAttribute("baseline-shift", "-1em");
-					text.setAttribute("y", barsegment.y);
-				}
-				else {
-					text.setAttribute("y", windowSize.height);					
-				}
-				text.innerHTML = barsegment.label;
-				document.querySelector("#mod-svg-labels").appendChild(text);
+				// var text = document.createElementNS("http://www.w3.org/2000/svg","text");
+				// if ( i == bars.length - 1 ) {
+				// 	text.setAttribute("x", barsegment.x - barsegmentlabelgap);
+				// 	text.setAttribute("text-anchor", "end");
+				// }				
+				// else {
+				// 	text.setAttribute("x", barsegment.x + barwidth + barsegmentlabelgap);
+				// 	text.setAttribute("text-anchor", "start");
+				// }
+				// if ( barsegment.y < windowSize.height - barsegmentgap ){
+				// 	text.setAttribute("baseline-shift", "-1em");
+				// 	text.setAttribute("y", barsegment.y);
+				// }
+				// else {
+				// 	text.setAttribute("y", windowSize.height);					
+				// }
+				// text.innerHTML = barsegment.label;
+				// document.querySelector("#mod-svg-labels").appendChild(text);
 
 			});
 		});
@@ -262,7 +307,6 @@ Spotfire.initialize(async (mod) => {
 		 * Render rows
 		 */	
 		rows.forEach(function(row, j){
-			
 			var rowvalue = Number(row.continuous("Y").value());
 			var rowlabel = row.categorical("X").value();
 			var rowcolor = row.color().hexCode;
